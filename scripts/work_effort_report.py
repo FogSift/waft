@@ -371,7 +371,21 @@ def _load_index(index_path: Path) -> dict:
 
 def _write_index(index_path: Path, reports: list[dict], latest_run_id: str) -> None:
     payload = {"latest_run_id": latest_run_id, "reports": reports}
-    index_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _atomic_write_text(index_path, json.dumps(payload, indent=2))
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}-{time.time_ns()}")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}-{time.time_ns()}")
+    tmp.write_bytes(content)
+    os.replace(tmp, path)
 
 
 def _discover_report_runs(output_dir: Path) -> list[dict]:
@@ -1508,15 +1522,22 @@ def _render_hub_html(
           alertCooldownMs: softwareLimits.alertCooldownMs || 12000,
         }};
         let timerId = null;
-        let longTasksInWindow = 0;
+        let longTaskTimestamps = [];
         let lastTick = performance.now();
         let lastAlertMs = 0;
+        let lastSampleAtMs = 0;
+        let sampleRequestTimer = null;
         let longTaskObserver = null;
+        const longTaskWindowMs = Math.max(60000, adaptiveLimits.sampleMs * 12);
 
         if ('PerformanceObserver' in window) {{
           try {{
             longTaskObserver = new PerformanceObserver((list) => {{
-              longTasksInWindow += list.getEntries().length;
+              const nowPerf = performance.now();
+              const entries = list.getEntries();
+              for (let i = 0; i < entries.length; i++) {{
+                longTaskTimestamps.push(nowPerf);
+              }}
             }});
             longTaskObserver.observe({{ entryTypes: ['longtask'] }});
           }} catch (err) {{
@@ -1591,12 +1612,14 @@ def _render_hub_html(
 
         function sample() {{
           const nowPerf = performance.now();
+          lastSampleAtMs = Date.now();
           const expectedMs = adaptiveLimits.sampleMs;
           const lagMs = Math.max(0, Math.round(nowPerf - lastTick - expectedMs));
           lastTick = nowPerf;
           const queueDepth = RenderQueueManager.size();
-          const longTasksPerMin = Math.round(longTasksInWindow * (60000 / expectedMs));
-          longTasksInWindow = 0;
+          const cutoff = nowPerf - longTaskWindowMs;
+          longTaskTimestamps = longTaskTimestamps.filter((ts) => ts >= cutoff);
+          const longTasksPerMin = Math.round(longTaskTimestamps.length * (60000 / longTaskWindowMs));
           let heapRatio = null;
           if (performance.memory && performance.memory.jsHeapSizeLimit > 0) {{
             heapRatio = performance.memory.usedJSHeapSize / performance.memory.jsHeapSizeLimit;
@@ -1606,6 +1629,33 @@ def _render_hub_html(
           updateUi(snapshot, evaluation);
           maybeAlert(evaluation);
           Logger.info('resource.sample', {{ snapshot, evaluation, adaptiveLimits }});
+        }}
+
+        function requestSample(urgency = 'normal') {{
+          const level = urgency === 'high' || urgency === 'critical'
+            ? 'high'
+            : (urgency === 'low' ? 'low' : 'normal');
+          if (sampleRequestTimer) {{
+            clearTimeout(sampleRequestTimer);
+            sampleRequestTimer = null;
+          }}
+          if (level === 'high') {{
+            sample();
+            return;
+          }}
+          if (level === 'low') {{
+            const minGapMs = adaptiveLimits.sampleMs * 2;
+            if (Date.now() - lastSampleAtMs < minGapMs) return;
+            sampleRequestTimer = setTimeout(() => {{
+              sampleRequestTimer = null;
+              sample();
+            }}, minGapMs);
+            return;
+          }}
+          sampleRequestTimer = setTimeout(() => {{
+            sampleRequestTimer = null;
+            sample();
+          }}, Math.max(150, Math.round(adaptiveLimits.sampleMs * 0.35)));
         }}
 
         function start() {{
@@ -1618,6 +1668,10 @@ def _render_hub_html(
           if (timerId) {{
             clearInterval(timerId);
             timerId = null;
+          }}
+          if (sampleRequestTimer) {{
+            clearTimeout(sampleRequestTimer);
+            sampleRequestTimer = null;
           }}
         }}
 
@@ -1632,7 +1686,7 @@ def _render_hub_html(
           }}
         }}
 
-        return {{ start, stop, teardown }};
+        return {{ start, stop, teardown, requestSample }};
       }})();
 
       function showToast(msg) {{
@@ -1791,6 +1845,7 @@ def _render_hub_html(
       }}
 
       function checkRoute() {{
+        ResourceMonitorManager.requestSample('normal');
         const endpoint = (endpointInput.value || '').trim();
         if (!endpoint) {{
           routeStatus.textContent = 'Enter a route first.';
@@ -1811,6 +1866,7 @@ def _render_hub_html(
 
       function requestApplyFilters() {{
         if (filterTimer) clearTimeout(filterTimer);
+        ResourceMonitorManager.requestSample('low');
         filterTimer = setTimeout(() => applyFilters(true), DEBOUNCE_MS);
       }}
 
@@ -1820,6 +1876,7 @@ def _render_hub_html(
       }});
       HandlerManager.bind(checkRouteBtn, 'click', checkRoute, 'route.check');
       HandlerManager.bind(generatePromptBtn, 'click', () => {{
+        ResourceMonitorManager.requestSample('normal');
         const exists = checkRoute();
         promptOutput.value = buildPrompt(exists);
         showToast('Prompt generated');
@@ -1833,10 +1890,12 @@ def _render_hub_html(
         }}
       }}, 'prompt.copy');
       HandlerManager.bind(loadMoreBtn, 'click', () => {{
+        ResourceMonitorManager.requestSample('low');
         visibleLimit += PAGE_SIZE;
         applyFilters(false);
       }}, 'archive.loadMore');
       HandlerManager.bind(showAllBtn, 'click', () => {{
+        ResourceMonitorManager.requestSample('low');
         visibleLimit = cards.length;
         applyFilters(false);
       }}, 'archive.showAll');
@@ -1940,10 +1999,10 @@ def main() -> int:
         latest_md = output_dir / "recent_work_report_latest.md"
         latest_html = output_dir / "recent_work_report_latest.html"
         latest_pdf = output_dir / "recent_work_report_latest.pdf"
-        latest_md.write_text(markdown_text, encoding="utf-8")
-        latest_html.write_text(html_text, encoding="utf-8")
+        _atomic_write_text(latest_md, markdown_text)
+        _atomic_write_text(latest_html, html_text)
         if pdf_path.exists():
-            latest_pdf.write_bytes(pdf_path.read_bytes())
+            _atomic_write_bytes(latest_pdf, pdf_path.read_bytes())
 
         current_entry = {
             "run_id": stamp,
@@ -1976,7 +2035,7 @@ def main() -> int:
         hub_path = output_dir / f"report_hub_{stamp}.html"
         latest_hub = output_dir / "report_hub_latest.html"
         hub_path.write_text(hub_html, encoding="utf-8")
-        latest_hub.write_text(hub_html, encoding="utf-8")
+        _atomic_write_text(latest_hub, hub_html)
 
         print("=== WAFT Recent Work Report ===")
         print(f"Markdown: {md_path}")

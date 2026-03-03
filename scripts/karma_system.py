@@ -10,6 +10,8 @@ Design goals:
 from __future__ import annotations
 
 import json
+import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,7 +101,16 @@ class KarmaSystem:
         p = Path(path)
         if not p.exists():
             return self
-        payload = json.loads(p.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            self.state = KarmaState()
+            self.events = []
+            return self
+        if not isinstance(payload, dict):
+            self.state = KarmaState()
+            self.events = []
+            return self
         state = payload.get("state", {})
         self.state = KarmaState(
             score=float(state.get("score", 0.0)),
@@ -127,7 +138,9 @@ class KarmaSystem:
     def save(self, path: str | Path) -> Path:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(self.snapshot(), indent=2), encoding="utf-8")
+        tmp = p.with_name(f".{p.name}.tmp-{os.getpid()}-{time.time_ns()}")
+        tmp.write_text(json.dumps(self.snapshot(), indent=2), encoding="utf-8")
+        os.replace(tmp, p)
         return p
 
 
