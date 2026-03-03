@@ -89,6 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--work-effort-count", type=int, default=12)
     parser.add_argument("--devlog-sections", type=int, default=10)
     parser.add_argument("--hub-max-runs", type=int, default=240)
+    parser.add_argument("--strict-local", action="store_true")
     parser.add_argument("--no-open", action="store_true")
     return parser.parse_args()
 
@@ -1976,6 +1977,13 @@ def _print_missing_input_error(label: str, missing_path: Path, root: Path, args:
     print(f"[hint] Current working directory: {root}")
 
 
+def _print_strict_local_error(missing_path: Path) -> None:
+    print(
+        f"[error] strict-local: missing {missing_path}; run from a repo with _work_efforts/devlog.md "
+        "or pass --work-efforts-dir/--devlog explicitly."
+    )
+
+
 def main() -> int:
     _configure_logging()
     started = time.perf_counter()
@@ -1989,9 +1997,15 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not work_efforts_dir.exists():
+        if args.strict_local:
+            _print_strict_local_error(work_efforts_dir)
+            return 1
         _print_missing_input_error("work efforts directory", work_efforts_dir, root, args)
         return 1
     if not devlog_path.exists():
+        if args.strict_local:
+            _print_strict_local_error(devlog_path)
+            return 1
         _print_missing_input_error("devlog file", devlog_path, root, args)
         return 1
 
