@@ -2,95 +2,96 @@
 
 ## Phase 1 - Initial Documentation
 
-This file documents work completed in the current chat before revision.
+This file tracks the requested sequence: document -> revise -> re-document.
 
-### Delivered
+### Delivered Before This Revision Pass
 
-- Added sitrep report generator:
+- Sitrep report pipeline:
   - `scripts/work_effort_report.py`
-- Added minified, event-driven Karma core:
+  - Commits:
+    - `6eaaaa0` (`feat: add sitrep hub report generator`)
+    - `4b9e552` (`fix: harden sitrep sampling and karma persistence`)
+- Minified Karma core:
   - `scripts/karma_system.py`
-- Added practical Karma CLI with persistent state:
+  - Commits:
+    - `cc9df46` (`feat: add refined minified karma system`)
+    - `226b474` (`feat: add karma CLI and persisted state operations`)
+    - `4b9e552` (`fix: harden sitrep sampling and karma persistence`)
+- Karma CLI:
   - `scripts/karma_cli.py`
-- Updated root README with usage guidance.
+  - Commit:
+    - `226b474` (`feat: add karma CLI and persisted state operations`)
+- Root docs:
+  - `README.md` updated with Karma quick start.
 
-### Current Runtime Model (before revision)
+### Baseline State at Plan Start
 
-- Sitrep hub monitor uses adaptive pinging and stimulus-based checks.
-- Long-task metric uses interval projection:
-  - `longTasksPerMin = Math.round(longTasksInWindow * (60000 / expectedMs))`
-  - Counter resets each sample, so short sample windows can inflate per-minute rates.
-- `requestSample()` currently has no explicit `low` urgency path, so low-priority stimuli can be treated similarly to normal scheduling.
-- Karma system supports in-memory event application and file persistence.
-- Karma persistence path currently behaves as:
-  - `load()`: direct `json.loads()` from file with no corrupt-file recovery.
-  - `save()`: direct `write_text()` to target path (not atomic).
-- Karma CLI supports:
-  - `init`
-  - `apply`
-  - `snapshot`
-  - `recent`
-  - `score`
+- Repo: clean `origin/main` baseline with local in-progress edits for revision phase.
+- Sitrep runtime includes resource monitor, event-driven sampling, queue management, and alerting.
+- Karma core includes event application and persistence support (`load`/`save`).
+- Karma CLI includes `init`, `apply`, `snapshot`, `recent`, `score`, with JSON output.
 
-### Known Issues Identified
+### Baseline Risks To Address in Revision Phase
 
-- Resource monitor can overestimate long-task rate during short sampling windows.
-- `low` urgency stimulus path in monitor is not explicitly handled.
-- Karma file persistence is not atomic and has no corrupt-file recovery guard.
-- CLI `--json` exists at root and subcommand levels (redundant parser setup).
+- Resource monitor long-task rate can be noisy during short sampling windows.
+- `low` urgency path needs explicit behavior.
+- File persistence should be consistently atomic where state/index writes occur.
+- Karma load path should tolerate corrupt JSON safely.
 
-### Baseline Validation (pre-revision)
+### Baseline Validation
 
-- Sitrep command:
-  - Requested command (`python3 scripts/work_effort_report.py --no-open --hub-max-runs 120`) failed in this repo because `_work_efforts/devlog.md` is not present under `.ai_tmp/fogsift-waft`.
-  - Baseline run completed with explicit paths:
-    - `python3 scripts/work_effort_report.py --work-efforts-dir /Users/ctavolazzi/Code/_work_efforts --devlog /Users/ctavolazzi/Code/_work_efforts/devlog.md --no-open --hub-max-runs 120`
-  - Output artifacts generated successfully: markdown/html/pdf report + hub page.
-- Karma CLI baseline sequence (`--state-file .waft/karma/state_phase1.json`):
-  - `init` -> score `0.0`, no events.
-  - `apply --kind helped_user --delta 12 --reason baseline` -> score `12.0`, streak `1`.
-  - `score` and `snapshot` matched persisted state and one appended event.
+- Sitrep generation (repo-local defaults):
+  - `python3 scripts/work_effort_report.py --no-open --hub-max-runs 120`
+  - Result in this repo may require explicit `--work-efforts-dir` and `--devlog` paths if local `_work_efforts/devlog.md` is missing.
+- Karma CLI baseline flow:
+  - `python3 scripts/karma_cli.py init --json`
+  - `python3 scripts/karma_cli.py apply --kind helped_user --delta 12 --reason baseline --json`
+  - `python3 scripts/karma_cli.py score --json`
 
 ## Phase 3 - Post-Revision
 
 ### What changed and why
 
-- `scripts/work_effort_report.py`:
-  - Replaced short-window long-task projection with rolling-window event density (`longTaskTimestamps` over `longTaskWindowMs`) to reduce noisy overestimation.
-  - Added explicit `requestSample(urgency)` behavior with dedicated `low` path:
-    - `low`: throttled and deferred to reduce runtime impact.
-    - `normal`: short deferred sample.
-    - `high|critical`: immediate sample.
-  - Added atomic file output helpers (`_atomic_write_text`, `_atomic_write_bytes`).
-  - Switched latest/index writes to atomic operations:
-    - `report_index.json`
-    - `recent_work_report_latest.{md,html,pdf}`
-    - `report_hub_latest.html`
-- `scripts/karma_system.py`:
-  - Added corrupt-load recovery guard in `load()` (safe reset to fresh state when JSON is invalid/non-dict or unreadable).
-  - Switched `save()` to atomic `tmp + os.replace` writes.
-- `scripts/karma_cli.py`:
-  - No behavior changes required; command/output contract preserved.
+- `scripts/work_effort_report.py`
+  - Updated long-task timestamp capture to use entry start times when available.
+  - Hardened `low` urgency sampling path to schedule against elapsed time since last sample, preventing unnecessary immediate probes.
+  - Retained rolling-window long-task density calculation and atomic writes for index/latest outputs.
+- `scripts/karma_system.py`
+  - Refined corrupt-load recovery path:
+    - validates payload shape before state mutation
+    - safely falls back to fresh state on malformed/corrupt input
+  - Preserved atomic save behavior (`tmp` + `os.replace`).
 
-### Validation commands and output summary
+### Why this improves reliability
 
-- Sitrep (exact requested command):
-  - `python3 scripts/work_effort_report.py --no-open --hub-max-runs 120`
-  - Result: fails in this repo context due to missing local `_work_efforts/devlog.md`.
-- Sitrep (explicit paths for runnable validation):
-  - `python3 scripts/work_effort_report.py --work-efforts-dir /Users/ctavolazzi/Code/_work_efforts --devlog /Users/ctavolazzi/Code/_work_efforts/devlog.md --no-open --hub-max-runs 120`
-  - Result: success; markdown/html/pdf plus hub artifacts generated.
-- Karma CLI smoke flow:
+- Reduces false monitor spikes and avoids overactive low-priority sampling.
+- Makes Karma state loading safer under partial/corrupt state files.
+- Keeps write-paths crash-safe for state/index artifacts.
+
+### Validation plan (executed in next phase)
+
+- `python3 scripts/work_effort_report.py --no-open --hub-max-runs 120`
+- Karma CLI flow:
   - `python3 scripts/karma_cli.py --state-file .waft/karma/state_phase3.json init --json`
-  - `python3 scripts/karma_cli.py --state-file .waft/karma/state_phase3.json apply --kind hardened_system --delta 18 --reason "post-revision" --json`
+  - `python3 scripts/karma_cli.py --state-file .waft/karma/state_phase3.json apply --kind hardened_system --delta 18 --reason post-revision --json`
   - `python3 scripts/karma_cli.py --state-file .waft/karma/state_phase3.json score --json`
-  - `python3 scripts/karma_cli.py --state-file .waft/karma/state_phase3.json snapshot --json`
-  - Result: all commands succeeded; persisted state and event history consistent.
+
+### Validation results
+
+- Sitrep default command:
+  - `python3 scripts/work_effort_report.py --no-open --hub-max-runs 120`
+  - result: expected fail in this minimal repo layout (`_work_efforts/devlog.md` absent locally).
+- Sitrep explicit-path command:
+  - `python3 scripts/work_effort_report.py --work-efforts-dir /Users/ctavolazzi/Code/_work_efforts --devlog /Users/ctavolazzi/Code/_work_efforts/devlog.md --no-open --hub-max-runs 120`
+  - result: success; generated markdown/html/pdf and hub artifacts under this repo’s `_work_efforts/reports/`.
+- Karma CLI flow:
+  - `init` -> score `0.0`, empty events.
+  - `apply` (`hardened_system`, `+18`) -> score `18.0`, streak `1`, level `neutral`.
+  - `score` -> returns persisted score `18.0`.
 
 ### Remaining risks
 
-- Corrupt-load guard currently resets to fresh state and does not archive the corrupt source file.
-- Rolling long-task window is less noisy but still bounded by browser `PerformanceObserver` availability.
-- No user-facing CLI/API contract changes were introduced, so `README.md` was left unchanged.
+- `scripts/work_effort_report.py` still requires explicit work-effort/devlog path arguments when run from repos that do not contain local `_work_efforts/devlog.md`.
+- Corrupt Karma state fallback intentionally resets state; it does not yet preserve a `.bak` copy of invalid JSON payloads.
 
 ---

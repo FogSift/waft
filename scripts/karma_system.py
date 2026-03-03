@@ -103,36 +103,44 @@ class KarmaSystem:
             return self
         try:
             payload = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            self.state = KarmaState()
-            self.events = []
-            return self
-        if not isinstance(payload, dict):
-            self.state = KarmaState()
-            self.events = []
-            return self
-        state = payload.get("state", {})
-        self.state = KarmaState(
-            score=float(state.get("score", 0.0)),
-            streak=int(state.get("streak", 0)),
-            level=str(state.get("level", "neutral")),
-            updated_at=str(state.get("updated_at", _iso_now())),
-        )
-        events = payload.get("events", [])
-        self.events = [
-            KarmaEvent(
-                kind=str(e.get("kind", "unknown")),
-                delta=float(e.get("delta", 0.0)),
-                reason=str(e.get("reason", "")),
-                ts=str(e.get("ts", _iso_now())),
+            if not isinstance(payload, dict):
+                raise ValueError("Payload is not an object")
+            state = payload.get("state", {})
+            limits = payload.get("limits", {})
+            min_score = float(limits.get("min_score", self.min_score))
+            max_score = float(limits.get("max_score", self.max_score))
+            max_events = max(1, int(limits.get("max_events", self.max_events)))
+            score = float(state.get("score", 0.0))
+            streak = int(state.get("streak", 0))
+            updated_at = str(state.get("updated_at", _iso_now()))
+            events = payload.get("events", [])
+            parsed_events: list[KarmaEvent] = []
+            if isinstance(events, list):
+                for e in events:
+                    if not isinstance(e, dict):
+                        continue
+                    parsed_events.append(
+                        KarmaEvent(
+                            kind=str(e.get("kind", "unknown")),
+                            delta=float(e.get("delta", 0.0)),
+                            reason=str(e.get("reason", "")),
+                            ts=str(e.get("ts", _iso_now())),
+                        )
+                    )
+            self.min_score = min_score
+            self.max_score = max_score
+            self.max_events = max_events
+            clamped_score = self._clamp(score)
+            self.state = KarmaState(
+                score=clamped_score,
+                streak=max(0, streak),
+                level=self._level(clamped_score),
+                updated_at=updated_at,
             )
-            for e in events
-            if isinstance(e, dict)
-        ][-self.max_events :]
-        limits = payload.get("limits", {})
-        self.min_score = float(limits.get("min_score", self.min_score))
-        self.max_score = float(limits.get("max_score", self.max_score))
-        self.max_events = int(limits.get("max_events", self.max_events))
+            self.events = parsed_events[-self.max_events :]
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            self.state = KarmaState()
+            self.events = []
         return self
 
     def save(self, path: str | Path) -> Path:

@@ -1533,10 +1533,9 @@ def _render_hub_html(
         if ('PerformanceObserver' in window) {{
           try {{
             longTaskObserver = new PerformanceObserver((list) => {{
-              const nowPerf = performance.now();
               const entries = list.getEntries();
               for (let i = 0; i < entries.length; i++) {{
-                longTaskTimestamps.push(nowPerf);
+                longTaskTimestamps.push(entries[i].startTime || performance.now());
               }}
             }});
             longTaskObserver.observe({{ entryTypes: ['longtask'] }});
@@ -1645,11 +1644,16 @@ def _render_hub_html(
           }}
           if (level === 'low') {{
             const minGapMs = adaptiveLimits.sampleMs * 2;
-            if (Date.now() - lastSampleAtMs < minGapMs) return;
+            const elapsedMs = Date.now() - lastSampleAtMs;
+            const delayMs = Math.max(0, minGapMs - elapsedMs);
+            if (delayMs === 0) {{
+              sample();
+              return;
+            }}
             sampleRequestTimer = setTimeout(() => {{
               sampleRequestTimer = null;
               sample();
-            }}, minGapMs);
+            }}, delayMs);
             return;
           }}
           sampleRequestTimer = setTimeout(() => {{
