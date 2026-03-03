@@ -9,8 +9,10 @@ Design goals:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 def _iso_now() -> str:
@@ -92,6 +94,41 @@ class KarmaSystem:
                 "max_events": self.max_events,
             },
         }
+
+    def load(self, path: str | Path) -> "KarmaSystem":
+        p = Path(path)
+        if not p.exists():
+            return self
+        payload = json.loads(p.read_text(encoding="utf-8"))
+        state = payload.get("state", {})
+        self.state = KarmaState(
+            score=float(state.get("score", 0.0)),
+            streak=int(state.get("streak", 0)),
+            level=str(state.get("level", "neutral")),
+            updated_at=str(state.get("updated_at", _iso_now())),
+        )
+        events = payload.get("events", [])
+        self.events = [
+            KarmaEvent(
+                kind=str(e.get("kind", "unknown")),
+                delta=float(e.get("delta", 0.0)),
+                reason=str(e.get("reason", "")),
+                ts=str(e.get("ts", _iso_now())),
+            )
+            for e in events
+            if isinstance(e, dict)
+        ][-self.max_events :]
+        limits = payload.get("limits", {})
+        self.min_score = float(limits.get("min_score", self.min_score))
+        self.max_score = float(limits.get("max_score", self.max_score))
+        self.max_events = int(limits.get("max_events", self.max_events))
+        return self
+
+    def save(self, path: str | Path) -> Path:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(self.snapshot(), indent=2), encoding="utf-8")
+        return p
 
 
 if __name__ == "__main__":
