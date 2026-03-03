@@ -139,6 +139,13 @@ class KarmaSystem:
             )
             self.events = parsed_events[-self.max_events :]
         except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            # Quarantine unreadable/corrupt state for forensics.
+            try:
+                quarantine = p.with_name(f"{p.name}.corrupt-{time.time_ns()}")
+                if p.exists():
+                    os.replace(p, quarantine)
+            except OSError:
+                pass
             self.state = KarmaState()
             self.events = []
         return self

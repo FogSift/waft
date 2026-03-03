@@ -1963,6 +1963,19 @@ def _open_in_chrome(path: Path) -> None:
     webbrowser.open(path.as_uri())
 
 
+def _print_missing_input_error(label: str, missing_path: Path, root: Path, args: argparse.Namespace) -> None:
+    print(f"[error] Missing {label}: {missing_path}")
+    print("[hint] Run from your project root with explicit inputs:")
+    print(
+        "       "
+        f"python scripts/work_effort_report.py "
+        f"--work-efforts-dir '{args.work_efforts_dir}' "
+        f"--devlog '{args.devlog}' "
+        f"--output-dir '{args.output_dir}'"
+    )
+    print(f"[hint] Current working directory: {root}")
+
+
 def main() -> int:
     _configure_logging()
     started = time.perf_counter()
@@ -1976,10 +1989,10 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not work_efforts_dir.exists():
-        print(f"[error] Missing work efforts directory: {work_efforts_dir}")
+        _print_missing_input_error("work efforts directory", work_efforts_dir, root, args)
         return 1
     if not devlog_path.exists():
-        print(f"[error] Missing devlog file: {devlog_path}")
+        _print_missing_input_error("devlog file", devlog_path, root, args)
         return 1
 
     now = datetime.now()
@@ -1994,10 +2007,10 @@ def main() -> int:
         md_path = output_dir / f"recent_work_report_{stamp}.md"
         html_path = output_dir / f"recent_work_report_{stamp}.html"
         pdf_path = output_dir / f"recent_work_report_{stamp}.pdf"
-        md_path.write_text(markdown_text, encoding="utf-8")
+        _atomic_write_text(md_path, markdown_text)
 
         html_text = _render_html(markdown_text, generated_at)
-        html_path.write_text(html_text, encoding="utf-8")
+        _atomic_write_text(html_path, html_text)
         _write_pdf(html_text, html_path, pdf_path)
 
         latest_md = output_dir / "recent_work_report_latest.md"
@@ -2038,7 +2051,7 @@ def main() -> int:
         )
         hub_path = output_dir / f"report_hub_{stamp}.html"
         latest_hub = output_dir / "report_hub_latest.html"
-        hub_path.write_text(hub_html, encoding="utf-8")
+        _atomic_write_text(hub_path, hub_html)
         _atomic_write_text(latest_hub, hub_html)
 
         print("=== WAFT Recent Work Report ===")

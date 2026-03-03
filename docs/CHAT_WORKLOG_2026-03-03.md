@@ -95,3 +95,44 @@ This file tracks the requested sequence: document -> revise -> re-document.
 - Corrupt Karma state fallback intentionally resets state; it does not yet preserve a `.bak` copy of invalid JSON payloads.
 
 ---
+
+## Phase 4 - Clever Hardening Pass
+
+### What changed and why
+
+- `scripts/karma_system.py`
+  - Added corrupt-state quarantine on load failure:
+    - unreadable/invalid state file is renamed to `*.corrupt-<timestamp>`
+    - fresh state is still restored for continuity
+  - This preserves forensic evidence instead of silently discarding bad state.
+- `scripts/work_effort_report.py`
+  - Added `_print_missing_input_error(...)` helper to provide explicit remediation hints:
+    - prints a runnable command with explicit `--work-efforts-dir`, `--devlog`, and `--output-dir`
+    - includes current working directory for fast diagnosis
+  - Switched timestamped report outputs to atomic writes:
+    - `recent_work_report_<stamp>.md`
+    - `recent_work_report_<stamp>.html`
+    - `report_hub_<stamp>.html`
+  - This aligns timestamped artifacts with existing atomic-write behavior used for latest/index outputs.
+
+### Validation results
+
+- Date check:
+  - `date` -> `Tue Mar 3 08:45:34 PST 2026`
+- Karma CLI smoke:
+  - `python3 scripts/karma_cli.py --state-file .ai_tmp/karma_state_test.json init --json`
+  - `python3 scripts/karma_cli.py --state-file .ai_tmp/karma_state_test.json apply --kind test --delta 5 --reason smoke --json`
+  - `python3 scripts/karma_cli.py --state-file .ai_tmp/karma_state_test.json score --json`
+  - result: success; persisted score/streak updated as expected.
+- Sitrep negative path:
+  - `python3 scripts/work_effort_report.py --no-open --work-efforts-dir _work_efforts --devlog _work_efforts/devlog.md --output-dir _work_efforts/reports`
+  - result: expected fail with actionable remediation hints (new behavior verified).
+- Sitrep positive path (fixture):
+  - command executed against temporary fixture work-efforts/devlog paths
+  - result: success; markdown/html/pdf/hub artifacts generated.
+
+### Cleanup
+
+- Removed temporary smoke artifacts before commit:
+  - `.ai_tmp/`
+  - `scripts/__pycache__/`
